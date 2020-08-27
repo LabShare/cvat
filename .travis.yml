@@ -24,7 +24,6 @@ install:
 script:
   - npm run lint
   - xvfb-run npm run coverage
-  - codecov
 notifications:
   email: false
 branches:
