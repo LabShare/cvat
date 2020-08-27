@@ -1,17 +1,45 @@
 language: node_js
+os:
+  - linux
 node_js:
-  - "12.4.0"
-
+  - lts/*
+  - node
+sudo: required
+addons:
+  chrome: stable
+before_install:
+  - |-
+    if [ $TRAVIS_PULL_REQUEST == false ] && [ $TRAVIS_BRANCH == "master" ];
+     then
+        echo "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" > ~/.npmrc;
+      else
+        echo "//registry.npmjs.org/:_authToken=\${NPM_INSTALL_TOKEN}" > ~/.npmrc;
+    fi
+  - 'git config --global url."git@github.com:".insteadOf "https://github.com/"'
+install:
+  - npm i -g lsc codecov
+  - npm install
+  - npm rebuild
+  - npm run build
+script:
+  - npm run lint
+  - xvfb-run npm run coverage
+  - codecov
+notifications:
+  email: false
+branches:
+  except:
+    - /^v\d+\.\d+\.\d+$/
 jobs:
+  allow_failures:
+    - node_js: node
   include:
-    # Define the release stage that runs semantic-release
     - stage: release
+      if: branch = master
       node_js: lts/*
-      # Advanced: optionally overwrite your default `script` step to skip the tests
-      # script: skip
+      script: skip
       deploy:
         provider: script
         skip_cleanup: true
         script:
-          - npx semantic-release
-
+          -npm run deploy

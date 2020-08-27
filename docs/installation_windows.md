@@ -1,15 +1,3 @@
-### **Computer Vision and Automation TOOL [CVAT]**
-
-Powerful and efficient Computer Vision Annotation Tool (CVAT)
-Computer Vision Annotation Tool (CVAT) is an open source tool for annotating digital images and videos. The main function of the application is to provide users with convenient annotation instruments. For that purpose, we designed CVAT as a versatile service that has many powerful features.
-
-CVAT is a browser-based application for both individuals and teams that supports different work scenarios. The main tasks of supervised machine learning can be divided into three groups:
-
-*   Object detection
-*   Image classification
-*   Image segmentation
-
-
 ### **Local Setup Documentation Guide on Windows 10 for CVAT**
 
 *   Install WSL2 (Windows subsystem for Linux) refer to this [official guide]([https://docs.microsoft.com/en-gb/windows/wsl/install-win10]). WSL2 requires Windows 10, version 2004 or higher. Note: you may not install any Linux distribution unless necessary.

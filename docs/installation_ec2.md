@@ -1,15 +1,3 @@
-### **Computer Vision and Automation TOOL [CVAT]**
-
-Powerful and efficient Computer Vision Annotation Tool (CVAT)
-Computer Vision Annotation Tool (CVAT) is an open source tool for annotating digital images and videos. The main function of the application is to provide users with convenient annotation instruments. For that purpose, we designed CVAT as a versatile service that has many powerful features.
-
-CVAT is a browser-based application for both individuals and teams that supports different work scenarios. The main tasks of supervised machine learning can be divided into three groups:
-
-*   Object detection
-*   Image classification
-*   Image segmentation
-
-
 ### **Local Setup Documentation Guide on EC2 Instance of type [Amazon Linux 2 AMI] for CVAT**
 
 * We will be connecting to our Linux Instance using SSH. To connect to your instance using SSH - In a terminal window, use the ssh command to connect to the instance. You specify the path and file name of the private key (.pem), the user name for your instance, and the public DNS name or IPv6 address for your instance. For more information about how to find the private key, the user name for your instance, and the DNS name or IPv6 address for an instance, see Locate the private key and Get information about your instance. To connect to your instance, use one of the following commands -- 
@@ -71,5 +59,5 @@ services:
 docker exec -it cvat bash -ic 'python3 ~/manage.py createsuperuser'
 ```
 
-
+We can now run our cvat/ui on http://my-instance-public-dns-name:80
  
