@@ -1,4 +1,4 @@
-# Copyright (C) 2018 Intel Corporation
+# Copyright (C) 2018-2020 Intel Corporation
 #
 # SPDX-License-Identifier: MIT
 
@@ -19,6 +19,8 @@ import sys
 import fcntl
 import shutil
 import subprocess
+import mimetypes
+mimetypes.add_type("application/wasm", ".wasm", True)
 
 from pathlib import Path
 
@@ -30,10 +32,14 @@ INTERNAL_IPS = ['127.0.0.1']
 
 try:
     sys.path.append(BASE_DIR)
-    from keys.secret_key import SECRET_KEY
+    from keys.secret_key import SECRET_KEY # pylint: disable=unused-import
 except ImportError:
+
     from django.utils.crypto import get_random_string
-    with open(os.path.join(BASE_DIR, 'keys', 'secret_key.py'), 'w') as f:
+    keys_dir = os.path.join(BASE_DIR, 'keys')
+    if not os.path.isdir(keys_dir):
+        os.mkdir(keys_dir)
+    with open(os.path.join(keys_dir, 'secret_key.py'), 'w') as f:
         chars = 'abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)'
         f.write("SECRET_KEY = '{}'\n".format(get_random_string(50, chars)))
     from keys.secret_key import SECRET_KEY
@@ -44,10 +50,22 @@ def generate_ssh_keys():
     ssh_dir = '{}/.ssh'.format(os.getenv('HOME'))
     pidfile = os.path.join(ssh_dir, 'ssh.pid')
 
+    def add_ssh_keys():
+        IGNORE_FILES = ('README.md', 'ssh.pid')
+        keys_to_add = [entry.name for entry in os.scandir(ssh_dir) if entry.name not in IGNORE_FILES]
+        keys_to_add = ' '.join(os.path.join(ssh_dir, f) for f in keys_to_add)
+        subprocess.run(['ssh-add {}'.format(keys_to_add)],
+            shell = True,
+            stderr = subprocess.PIPE,
+            # lets set the timeout if ssh-add requires a input passphrase for key
+            # otherwise the process will be freezed
+            timeout=30,
+            )
+
     with open(pidfile, "w") as pid:
         fcntl.flock(pid, fcntl.LOCK_EX)
         try:
-            subprocess.run(['ssh-add {}/*'.format(ssh_dir)], shell = True, stderr = subprocess.PIPE)
+            add_ssh_keys()
             keys = subprocess.run(['ssh-add -l'], shell = True,
                 stdout = subprocess.PIPE).stdout.decode('utf-8').split('\n')
             if 'has no identities' in keys[0]:
@@ -76,10 +94,6 @@ try:
 except Exception:
     pass
 
-# Application definition
-JS_3RDPARTY = {}
-CSS_3RDPARTY = {}
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -87,11 +101,13 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'cvat.apps.engine',
-    'cvat.apps.dashboard',
     'cvat.apps.authentication',
     'cvat.apps.documentation',
-    'cvat.apps.git',
+    'cvat.apps.dataset_manager',
+    'cvat.apps.engine',
+    'cvat.apps.dataset_repo',
+    'cvat.apps.restrictions',
+    'cvat.apps.lambda_manager',
     'django_rq',
     'compressor',
     'cacheops',
@@ -100,13 +116,29 @@ INSTALLED_APPS = [
     'revproxy',
     'rules',
     'rest_framework',
+    'rest_framework.authtoken',
     'django_filters',
     'drf_yasg',
+    'rest_auth',
+    'django.contrib.sites',
+    'allauth',
+    'allauth.account',
+    'corsheaders',
+    'allauth.socialaccount',
+    'rest_auth.registration'
 ]
+
+SITE_ID = 1
 
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'cvat.apps.authentication.auth.TokenAuthentication',
+        'cvat.apps.authentication.auth.SignatureAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication'
     ],
     'DEFAULT_VERSIONING_CLASS':
         # Don't try to use URLPathVersioning. It will give you /api/{version}
@@ -116,25 +148,30 @@ REST_FRAMEWORK = {
     # Need to add 'api-docs' here as a workaround for include_docs_urls.
     'ALLOWED_VERSIONS': ('v1', 'api-docs'),
     'DEFAULT_PAGINATION_CLASS':
-        'rest_framework.pagination.PageNumberPagination',
+        'cvat.apps.engine.pagination.CustomPagination',
     'PAGE_SIZE': 10,
     'DEFAULT_FILTER_BACKENDS': (
         'rest_framework.filters.SearchFilter',
         'django_filters.rest_framework.DjangoFilterBackend',
-        'rest_framework.filters.OrderingFilter')
+        'rest_framework.filters.OrderingFilter'),
+
+    # Disable default handling of the 'format' query parameter by REST framework
+    'URL_FORMAT_OVERRIDE': 'scheme',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/minute',
+    },
 }
 
-if 'yes' == os.environ.get('TF_ANNOTATION', 'no'):
-    INSTALLED_APPS += ['cvat.apps.tf_annotation']
+REST_AUTH_REGISTER_SERIALIZERS = {
+    'REGISTER_SERIALIZER': 'cvat.apps.restrictions.serializers.RestrictedRegisterSerializer',
+}
 
-if 'yes' == os.environ.get('OPENVINO_TOOLKIT', 'no'):
-    INSTALLED_APPS += ['cvat.apps.auto_annotation']
-
-if 'yes' == os.environ.get('OPENVINO_TOOLKIT', 'no'):
-    INSTALLED_APPS += ['cvat.apps.reid']
-
-if 'yes' == os.environ.get('WITH_DEXTR', 'no'):
-    INSTALLED_APPS += ['cvat.apps.dextr_segmentation']
+REST_AUTH_SERIALIZERS = {
+    'PASSWORD_RESET_SERIALIZER': 'cvat.apps.authentication.serializers.PasswordResetSerializerEx',
+}
 
 if os.getenv('DJANGO_LOG_VIEWER_HOST'):
     INSTALLED_APPS += ['cvat.apps.log_viewer']
@@ -142,13 +179,18 @@ if os.getenv('DJANGO_LOG_VIEWER_HOST'):
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
+    # FIXME
+    # 'corsheaders.middleware.CorsPostCsrfMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'dj_pagination.middleware.PaginationMiddleware',
 ]
+
+UI_URL = ''
 
 STATICFILES_FINDERS = [
     'django.contrib.staticfiles.finders.FileSystemFinder',
@@ -178,15 +220,21 @@ WSGI_APPLICATION = 'cvat.wsgi.application'
 
 # Django Auth
 DJANGO_AUTH_TYPE = 'BASIC'
-LOGIN_URL = 'login'
+DJANGO_AUTH_DEFAULT_GROUPS = []
+LOGIN_URL = 'rest_login'
 LOGIN_REDIRECT_URL = '/'
-AUTH_LOGIN_NOTE = '<p>Have not registered yet? <a href="/auth/register">Register here</a>.</p>'
 
 AUTHENTICATION_BACKENDS = [
     'rules.permissions.ObjectPermissionBackend',
-    'django.contrib.auth.backends.ModelBackend'
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
+# https://github.com/pennersr/django-allauth
+ACCOUNT_EMAIL_VERIFICATION = 'none'
+# set UI url to redirect after a successful e-mail confirmation
+ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = '/auth/login'
+OLD_PASSWORD_FIELD_ENABLED = True
 
 # Django-RQ
 # https://github.com/rq/django-rq
@@ -204,6 +252,13 @@ RQ_QUEUES = {
         'DB': 0,
         'DEFAULT_TIMEOUT': '24h'
     }
+}
+
+NUCLIO = {
+    'SCHEME': 'http',
+    'HOST': 'localhost',
+    'PORT': 8070,
+    'DEFAULT_TIMEOUT': 120
 }
 
 RQ_SHOW_ADMIN_LINK = True
@@ -262,13 +317,49 @@ CACHEOPS_DEGRADE_ON_FAILURE = True
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'Europe/Moscow'
+TIME_ZONE = os.getenv('TZ', 'Etc/UTC')
 
 USE_I18N = True
 
 USE_L10N = True
 
 USE_TZ = True
+
+CSRF_COOKIE_NAME = "csrftoken"
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/2.0/howto/static-files/
+
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+os.makedirs(STATIC_ROOT, exist_ok=True)
+
+DATA_ROOT = os.path.join(BASE_DIR, 'data')
+os.makedirs(DATA_ROOT, exist_ok=True)
+
+MEDIA_DATA_ROOT = os.path.join(DATA_ROOT, 'data')
+os.makedirs(MEDIA_DATA_ROOT, exist_ok=True)
+
+CACHE_ROOT = os.path.join(DATA_ROOT, 'cache')
+os.makedirs(CACHE_ROOT, exist_ok=True)
+
+TASKS_ROOT = os.path.join(DATA_ROOT, 'tasks')
+os.makedirs(TASKS_ROOT, exist_ok=True)
+
+PROJECTS_ROOT = os.path.join(DATA_ROOT, 'projects')
+os.makedirs(PROJECTS_ROOT, exist_ok=True)
+
+SHARE_ROOT = os.path.join(BASE_DIR, 'share')
+os.makedirs(SHARE_ROOT, exist_ok=True)
+
+MODELS_ROOT = os.path.join(DATA_ROOT, 'models')
+os.makedirs(MODELS_ROOT, exist_ok=True)
+
+LOGS_ROOT = os.path.join(BASE_DIR, 'logs')
+os.makedirs(LOGS_ROOT, exist_ok=True)
+
+MIGRATIONS_LOGS_ROOT = os.path.join(LOGS_ROOT, 'migrations')
+os.makedirs(MIGRATIONS_LOGS_ROOT, exist_ok=True)
 
 LOGGING = {
     'version': 1,
@@ -328,20 +419,43 @@ if os.getenv('DJANGO_LOG_SERVER_HOST'):
     LOGGING['loggers']['cvat.server']['handlers'] += ['logstash']
     LOGGING['loggers']['cvat.client']['handlers'] += ['logstash']
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/2.0/howto/static-files/
-
-STATIC_URL = '/static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'static')
-os.makedirs(STATIC_ROOT, exist_ok=True)
-DATA_ROOT = os.path.join(BASE_DIR, 'data')
-os.makedirs(DATA_ROOT, exist_ok=True)
-SHARE_ROOT = os.path.join(BASE_DIR, 'share')
-os.makedirs(SHARE_ROOT, exist_ok=True)
-MODELS_ROOT=os.path.join(BASE_DIR, 'models')
-os.makedirs(MODELS_ROOT, exist_ok=True)
-
 DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
 DATA_UPLOAD_MAX_NUMBER_FIELDS = None   # this django check disabled
 LOCAL_LOAD_MAX_FILES_COUNT = 500
 LOCAL_LOAD_MAX_FILES_SIZE = 512 * 1024 * 1024  # 512 MB
+
+RESTRICTIONS = {
+    'user_agreements': [],
+
+    # this setting limits the number of tasks for the user
+    'task_limit': None,
+
+    # this setting limits the number of projects for the user
+    'project_limit': None,
+
+    # this setting reduse task visibility to owner and assignee only
+    'reduce_task_visibility': False,
+
+    # allow access to analytics component to users with the following roles
+    'analytics_access': (
+        'engine.role.observer',
+        'engine.role.annotator',
+        'engine.role.user',
+        'engine.role.admin',
+        ),
+}
+
+# http://www.grantjenks.com/docs/diskcache/tutorial.html#djangocache
+CACHES = {
+   'default' : {
+       'BACKEND' : 'diskcache.DjangoCache',
+       'LOCATION' : CACHE_ROOT,
+       'TIMEOUT' : None,
+       'OPTIONS' : {
+            'size_limit' : 2 ** 40, # 1 Tb
+       }
+   }
+}
+
+USE_CACHE = True
+

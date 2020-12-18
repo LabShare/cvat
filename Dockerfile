@@ -1,18 +1,68 @@
-FROM ubuntu:16.04
+FROM ubuntu:20.04 as build-image
 
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy
 ARG socks_proxy
+ARG DJANGO_CONFIGURATION
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
+        apache2-dev \
+        build-essential \
+        curl \
+        libldap2-dev \
+        libsasl2-dev \
+        nasm \
+        git \
+        pkg-config \
+        python3-dev \
+        python3-pip \
+        python3-venv && \
+    rm -rf /var/lib/apt/lists/*
+
+# Compile Openh264 and FFmpeg
+ARG PREFIX=/opt/ffmpeg
+ARG PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig
+
+ENV FFMPEG_VERSION=4.3.1 \
+    OPENH264_VERSION=2.1.1
+
+WORKDIR /tmp/openh264
+RUN curl -sL https://github.com/cisco/openh264/archive/v${OPENH264_VERSION}.tar.gz --output openh264-${OPENH264_VERSION}.tar.gz && \
+    tar -zx --strip-components=1 -f openh264-${OPENH264_VERSION}.tar.gz && \
+    make -j5 && make install PREFIX=${PREFIX} && make clean
+
+WORKDIR /tmp/ffmpeg
+RUN curl -sLO https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.bz2 && \
+    tar -jx --strip-components=1 -f ffmpeg-${FFMPEG_VERSION}.tar.bz2 && \
+    ./configure --disable-nonfree --disable-gpl --enable-libopenh264 --enable-shared --disable-static --prefix="${PREFIX}" && \
+    make -j5 && make install && make distclean
+
+# Install requirements
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+RUN python3 -m pip install --no-cache-dir -U pip==20.0.1 setuptools==49.6.0 wheel==0.35.1
+COPY cvat/requirements/ /tmp/requirements/
+RUN DATUMARO_HEADLESS=1 python3 -m pip install --no-cache-dir -r /tmp/requirements/${DJANGO_CONFIGURATION}.txt
+
+
+FROM ubuntu:20.04
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ARG socks_proxy
+ARG TZ
 
 ENV TERM=xterm \
     http_proxy=${http_proxy}   \
     https_proxy=${https_proxy} \
     no_proxy=${no_proxy} \
-    socks_proxy=${socks_proxy}
-
-ENV LANG='C.UTF-8'  \
-    LC_ALL='C.UTF-8'
+    socks_proxy=${socks_proxy} \
+    LANG='C.UTF-8'  \
+    LC_ALL='C.UTF-8' \
+    TZ=${TZ}
 
 ARG USER
 ARG DJANGO_CONFIGURATION
@@ -20,134 +70,85 @@ ENV DJANGO_CONFIGURATION=${DJANGO_CONFIGURATION}
 
 # Install necessary apt packages
 RUN apt-get update && \
-    apt-get install -yq \
-        python-software-properties \
-        software-properties-common \
-        wget && \
-    add-apt-repository ppa:mc3man/xerus-media -y && \
-    add-apt-repository ppa:mc3man/gstffmpeg-keep -y && \
-    apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -yq \
+    DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
         apache2 \
-        apache2-dev \
         libapache2-mod-xsendfile \
         supervisor \
-        ffmpeg \
-        gstreamer0.10-ffmpeg \
-        libldap2-dev \
-        libsasl2-dev \
-        python3-dev \
-        python3-pip \
-        unzip \
-        unrar \
+        libldap-2.4-2 \
+        libsasl2-2 \
+        libpython3-dev \
+        tzdata \
+        python3-distutils \
         p7zip-full \
-        vim && \
-    add-apt-repository --remove ppa:mc3man/gstffmpeg-keep -y && \
-    add-apt-repository --remove ppa:mc3man/xerus-media -y && \
-    rm -rf /var/lib/apt/lists/*
+        git \
+        git-lfs \
+        poppler-utils \
+        ssh \
+        curl && \
+    ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    rm -rf /var/lib/apt/lists/* && \
+    echo 'application/wasm wasm' >> /etc/mime.types
+
+ARG CLAM_AV
+ENV CLAM_AV=${CLAM_AV}
+RUN if [ "$CLAM_AV" = "yes" ]; then \
+        apt-get update && \
+        apt-get --no-install-recommends install -yq \
+            clamav \
+            libclamunrar9 && \
+        sed -i 's/ReceiveTimeout 30/ReceiveTimeout 300/g' /etc/clamav/freshclam.conf && \
+        freshclam && \
+        chown -R ${USER}:${USER} /var/lib/clamav && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Add a non-root user
 ENV USER=${USER}
 ENV HOME /home/${USER}
-WORKDIR ${HOME}
-RUN adduser --shell /bin/bash --disabled-password --gecos "" ${USER}
-
-COPY components /tmp/components
-
-# OpenVINO toolkit support
-ARG OPENVINO_TOOLKIT
-ENV OPENVINO_TOOLKIT=${OPENVINO_TOOLKIT}
-RUN if [ "$OPENVINO_TOOLKIT" = "yes" ]; then \
-        /tmp/components/openvino/install.sh; \
-    fi
-
-# CUDA support
-ARG CUDA_SUPPORT
-ENV CUDA_SUPPORT=${CUDA_SUPPORT}
-RUN if [ "$CUDA_SUPPORT" = "yes" ]; then \
-        /tmp/components/cuda/install.sh; \
-    fi
-
-# Tensorflow annotation support
-ARG TF_ANNOTATION
-ENV TF_ANNOTATION=${TF_ANNOTATION}
-ENV TF_ANNOTATION_MODEL_PATH=${HOME}/rcnn/inference_graph
-RUN if [ "$TF_ANNOTATION" = "yes" ]; then \
-        bash -i /tmp/components/tf_annotation/install.sh; \
-    fi
-
-ARG WITH_TESTS
-RUN if [ "$WITH_TESTS" = "yes" ]; then \
-        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - && \
-        echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' | tee /etc/apt/sources.list.d/google-chrome.list && \
-        wget -qO- https://deb.nodesource.com/setup_9.x | bash - && \
-        apt-get update && \
-        DEBIAN_FRONTEND=noninteractive apt-get install -yq \
-            google-chrome-stable \
-            nodejs && \
-        rm -rf /var/lib/apt/lists/*; \
-        mkdir tests && cd tests && npm install \
-            eslint \
-            eslint-detailed-reporter \
-            karma \
-            karma-chrome-launcher \
-            karma-coveralls \
-            karma-coverage \
-            karma-junit-reporter \
-            karma-qunit \
-            qunit; \
-        echo "export PATH=~/tests/node_modules/.bin:${PATH}" >> ~/.bashrc; \
-    fi
-
-# Install and initialize CVAT, copy all necessary files
-COPY cvat/requirements/ /tmp/requirements/
-COPY supervisord.conf mod_wsgi.conf wait-for-it.sh manage.py ${HOME}/
-RUN pip3 install --no-cache-dir -r /tmp/requirements/${DJANGO_CONFIGURATION}.txt
-
-# Install git application dependencies
-RUN apt-get update && \
-    apt-get install -y ssh netcat-openbsd git curl zip  && \
-    wget -qO /dev/stdout https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
-    apt-get install -y git-lfs && \
-    git lfs install && \
-    rm -rf /var/lib/apt/lists/* && \
+RUN adduser --shell /bin/bash --disabled-password --gecos "" ${USER} && \
     if [ -z ${socks_proxy} ]; then \
         echo export "GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30\"" >> ${HOME}/.bashrc; \
     else \
         echo export "GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ProxyCommand='nc -X 5 -x ${socks_proxy} %h %p'\"" >> ${HOME}/.bashrc; \
     fi
 
-# Download model for re-identification app
-ENV REID_MODEL_DIR=${HOME}/reid
-RUN if [ "$OPENVINO_TOOLKIT" = "yes" ]; then \
-        mkdir ${HOME}/reid && \
-        wget https://download.01.org/openvinotoolkit/2018_R5/open_model_zoo/person-reidentification-retail-0079/FP32/person-reidentification-retail-0079.xml -O reid/reid.xml && \
-        wget https://download.01.org/openvinotoolkit/2018_R5/open_model_zoo/person-reidentification-retail-0079/FP32/person-reidentification-retail-0079.bin -O reid/reid.bin; \
+ARG INSTALL_SOURCES='no'
+WORKDIR ${HOME}/sources
+RUN if [ "$INSTALL_SOURCES" = "yes" ]; then \
+        sed -Ei 's/^# deb-src /deb-src /' /etc/apt/sources.list && \
+        apt-get update && \
+        dpkg --get-selections | while read -r line; do        \
+            package=$(echo "$line" | awk '{print $1}');       \
+            mkdir "$package";                                 \
+            (                                                 \
+                cd "$package";                                \
+                apt-get -q --download-only source "$package"; \
+            )                                                 \
+            done &&                                           \
+        rm -rf /var/lib/apt/lists/*;                          \
     fi
+COPY --from=build-image /tmp/openh264/openh264*.tar.gz /tmp/ffmpeg/ffmpeg*.tar.bz2 ${HOME}/sources/
 
-# TODO: CHANGE URL
-ARG WITH_DEXTR
-ENV WITH_DEXTR=${WITH_DEXTR}
-ENV DEXTR_MODEL_DIR=${HOME}/models/dextr
-RUN if [ "$WITH_DEXTR" = "yes" ]; then \
-        mkdir ${DEXTR_MODEL_DIR} -p && \
-        wget https://download.01.org/openvinotoolkit/models_contrib/cvat/dextr_model_v1.zip -O ${DEXTR_MODEL_DIR}/dextr.zip && \
-        unzip ${DEXTR_MODEL_DIR}/dextr.zip -d ${DEXTR_MODEL_DIR} && rm ${DEXTR_MODEL_DIR}/dextr.zip; \
-    fi
+# Copy python virtual enviroment and FFmpeg binaries from build-image
+COPY --from=build-image /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+COPY --from=build-image /opt/ffmpeg /usr
 
-COPY ssh ${HOME}/.ssh
-COPY cvat/ ${HOME}/cvat
-COPY tests ${HOME}/tests
-# Binary option is necessary to correctly apply the patch on Windows platform.
-# https://unix.stackexchange.com/questions/239364/how-to-fix-hunk-1-failed-at-1-different-line-endings-message
-RUN patch --binary -p1 < ${HOME}/cvat/apps/engine/static/engine/js/3rdparty.patch
-RUN chown -R ${USER}:${USER} .
+# Install and initialize CVAT, copy all necessary files
+COPY --chown=${USER} components /tmp/components
+COPY --chown=${USER} ssh ${HOME}/.ssh
+COPY --chown=${USER} supervisord.conf mod_wsgi.conf wait-for-it.sh manage.py ${HOME}/
+COPY --chown=${USER} cvat/ ${HOME}/cvat
+COPY --chown=${USER} utils/ ${HOME}/utils
+COPY --chown=${USER} tests/ ${HOME}/tests
 
 # RUN all commands below as 'django' user
 USER ${USER}
+WORKDIR ${HOME}
 
 RUN mkdir data share media keys logs /tmp/supervisord
 RUN python3 manage.py collectstatic
 
-EXPOSE 8080 8443
+EXPOSE 8080
 ENTRYPOINT ["/usr/bin/supervisord"]

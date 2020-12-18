@@ -61,6 +61,7 @@ video/mp2t	m2t
 video/mp2t	bdmv
 video/vnd.mpegurl	m4u
 video/mp4	m4v
+video/mxf	mxf
 
 # possible image formats
 image/x-minolta-mrw	mrw
@@ -220,3 +221,6 @@ application/x-tarz tar.z
 application/x-tzo tar.lzo
 application/x-xz-compressed-tar txz
 application/zip zip
+
+# PDF
+application/pdf pdf
