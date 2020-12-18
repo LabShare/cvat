@@ -1,8 +1,8 @@
 {
-  "name": "cvat-ui",
-  "version": "1.13.1",
+  "name": "@labshare/cvat-ui",
+  "version": "1.10.22",
   "description": "CVAT single-page application",
-  "main": "src/index.tsx",
+  "main": "dist/index.min.js",
   "scripts": {
     "build": "webpack --config ./webpack.config.js",
     "start": "REACT_APP_API_URL=http://localhost:7000 webpack-dev-server --config ./webpack.config.js --mode=development",
