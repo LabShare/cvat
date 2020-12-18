@@ -17,12 +17,12 @@ module.exports = {
     mode: 'production',
     devtool: 'source-map',
     entry: {
-        'cvat-ui': './src/index.tsx',
+        'cvat-ui': './src/index.ts',
     },
     output: {
         path: path.resolve(__dirname, 'dist'),
-        filename: '[name].[contenthash].min.js',
-        publicPath: '/',
+        filename: 'index.min.js',
+        libraryTarget: 'commonjs2'
     },
     devServer: {
         contentBase: path.join(__dirname, 'dist'),
@@ -100,7 +100,6 @@ module.exports = {
                 use: {
                     loader: 'worker-loader',
                     options: {
-                        publicPath: '/',
                         name: '3rdparty/[name].[contenthash].js',
                     },
                 },
@@ -111,7 +110,6 @@ module.exports = {
                 use: {
                     loader: 'worker-loader',
                     options: {
-                        publicPath: '/',
                         name: '[name].[contenthash].js',
                     },
                 },
@@ -128,7 +126,7 @@ module.exports = {
         }),
         new CopyPlugin([
             {
-                from: '../cvat-data/src/js/3rdparty/avc.wasm',
+                from: 'node_modules/@labshare/cvat-data/src/js/3rdparty/avc.wasm',
                 to: '3rdparty/',
             },
         ]),
