@@ -134,8 +134,12 @@ Other ways to ask questions and get our support:
 ## CORS Connection issue
 
 -To resolve the CORS connection issues, allow the port that send the requests to the cvat application.
+
+
 -To allow the port, add the URL to the whitelist array as shown below
 CORS_ORIGIN_WHITELIST = ['http://localhost:4200']
+
+
 -Another simple way to resolve the CORS issue is to allow all the connections by using following line of code
 CORS_ORIGIN_ALLOW_ALL = True
 This line of code allows all the requests irrespective of the port number.
